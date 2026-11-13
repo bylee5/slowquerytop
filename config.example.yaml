@@ -1,0 +1,47 @@
+# slowquerytop configuration
+# Copy to config.yaml (or point SLOWQUERYTOP_CONFIG / --config at it).
+# ${VAR} and ${VAR:-default} are expanded from environment variables — keep passwords out of this file.
+
+# Repositories that hold collected statistics (Anemometer "datasources").
+# The web UI shows a datasource selector; each collection target writes into one datasource.
+datasources:
+  default:
+    label: Local
+    url: sqlite:///slowquerytop.db          # any SQLAlchemy URL (sqlite / mssql+pyodbc / mysql+pymysql ...)
+
+  # A SQL Server database as repository: give a plain ODBC connection string.
+  # prod:
+  #   label: Production
+  #   odbc: 'DRIVER={ODBC Driver 18 for SQL Server};SERVER=dbmon01;DATABASE=slowquerytop;UID=sqtop;PWD=${SQTOP_REPO_PWD};TrustServerCertificate=yes'
+
+# SQL Server instances to collect from.
+#   type: querystore (SQL Server 2016+, recommended)  |  dmv (plan cache; any version, less accurate)
+# Required permission: VIEW DATABASE STATE on each database (querystore) / VIEW SERVER STATE (dmv).
+# Note: in YAML, use single quotes around connection strings that contain backslashes (.\SQLEXPRESS).
+targets:
+  - name: sql01
+    datasource: default
+    type: querystore
+    odbc: 'DRIVER={ODBC Driver 18 for SQL Server};SERVER=sql01;Trusted_Connection=yes;TrustServerCertificate=yes'
+    # hostname: SQL01          # label in the UI (default: @@SERVERNAME)
+    # databases: [shop, crm]   # default: every user database with Query Store enabled
+    lookback_hours: 24         # how far back the very first run reads
+    capture_plans: true        # store showplan XML for new plans
+
+  # - name: legacy01
+  #   datasource: default
+  #   type: dmv
+  #   odbc: 'DRIVER={ODBC Driver 17 for SQL Server};SERVER=legacy01;UID=sqtop;PWD=${LEGACY_PWD}'
+  #   databases: [erp]
+
+# Delete history older than N days after each collection run (0 = keep forever).
+retention_days: 90
+
+web:
+  host: 127.0.0.1
+  port: 8080
+  timezone: Asia/Seoul         # display / input time zone (data is stored in UTC)
+  default_range_hours: 168     # default report window
+  # auth:                      # optional HTTP basic auth (recommended: reviews are writable)
+  #   username: dba
+  #   password: ${SQTOP_WEB_PWD}

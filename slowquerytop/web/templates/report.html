@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Graph' if ui.view == 'graph' else 'Report' }} · slowquerytop{% endblock %}
+{% block content %}
+<form class="search" method="get" action="/report" id="search">
+  <input type="hidden" name="ds" value="{{ ui.ds }}">
+  <div class="view-toggle" role="tablist">
+    <label class="{{ 'on' if ui.view == 'table' }}"><input type="radio" name="view" value="table" {% if ui.view == 'table' %}checked{% endif %} onchange="this.form.submit()">Table</label>
+    <label class="{{ 'on' if ui.view == 'graph' }}"><input type="radio" name="view" value="graph" {% if ui.view == 'graph' %}checked{% endif %} onchange="this.form.submit()">Graph</label>
+  </div>
+
+  <div class="grid">
+    <label>From <input type="datetime-local" name="start" value="{{ ui.start_local }}"></label>
+    <label>To <input type="datetime-local" name="end" value="{{ ui.end_local }}"></label>
+    <div class="quick">
+      {% for label, hours in [('1h',1),('6h',6),('24h',24),('7d',168),('30d',720)] %}
+      <button type="button" data-hours="{{ hours }}">{{ label }}</button>
+      {% endfor %}
+    </div>
+    <label>Host
+      <select name="host" multiple size="{{ [dims.hostnames|length, 4]|min or 1 }}">
+        {% for h in dims.hostnames %}<option {% if h in p.hostnames %}selected{% endif %}>{{ h }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Database
+      <select name="db" multiple size="{{ [dims.dbs|length, 4]|min or 1 }}">
+        {% for d in dims.dbs %}<option {% if d in p.dbs %}selected{% endif %}>{{ d }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Query text contains <input type="search" name="q" value="{{ p.text }}" placeholder="e.g. Orders"></label>
+    <label>Checksum <input type="text" name="checksum" value="{{ p.checksum }}" size="18"></label>
+    <label>Review
+      <select name="status">
+        {% for v, l in [('all','All'),('unreviewed','Not reviewed'),('reviewed','Reviewed')] %}
+        <option value="{{ v }}" {% if p.status == v %}selected{% endif %}>{{ l }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Min. count <input type="number" name="min_exec" min="0" value="{{ p.min_exec }}" style="width:7em"></label>
+    <label>Group by
+      <select name="group">
+        {% for k, (label, cols) in GROUPS.items() %}
+        <option value="{{ k }}" {% if p.group == k %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  {% if ui.view == 'table' %}
+  <div class="grid">
+    <label>Order by
+      <select name="order">
+        {% for k, f in FIELDS.items() if f.agg or k == 'checksum' %}
+        <option value="{{ k }}" {% if p.order == k %}selected{% endif %}>{{ f.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Direction
+      <select name="dir">
+        <option value="desc" {% if p.direction == 'desc' %}selected{% endif %}>desc</option>
+        <option value="asc" {% if p.direction == 'asc' %}selected{% endif %}>asc</option>
+      </select>
+    </label>
+    <label>Limit <input type="number" name="limit" min="1" max="5000" value="{{ p.limit }}" style="width:6em"></label>
+  </div>
+  <details class="fields">
+    <summary>Columns ({{ p.fields|length }})</summary>
+    <div class="field-list">
+      {% for k, f in FIELDS.items() %}
+      <label title="{{ f.help }}"><input type="checkbox" name="f" value="{{ k }}" {% if k in p.fields %}checked{% endif %}> {{ f.label }}</label>
+      {% endfor %}
+    </div>
+  </details>
+  {% else %}
+  {% for f in p.fields %}<input type="hidden" name="f" value="{{ f }}">{% endfor %}
+  <div class="grid">
+    <label>Metric
+      <select name="metric">
+        {% for k, (label, a, b) in GRAPH_METRICS.items() %}
+        <option value="{{ k }}" {% if p.metric == k %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Bucket
+      <select name="bucket">
+        {% for k in BUCKETS %}<option value="{{ k }}" {% if p.bucket == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Series <select name="top">
+      {% for n in [0, 3, 5, 10, 20] %}
+      <option value="{{ n }}" {% if p.top == n %}selected{% endif %}>{{ 'Total only' if n == 0 else 'Top ' ~ n }}</option>
+      {% endfor %}
+    </select></label>
+  </div>
+  {% endif %}
+
+  <div class="actions">
+    <button type="submit" class="primary">Search</button>
+    <a href="/report?ds={{ ui.ds }}&view={{ ui.view }}">Reset</a>
+    <button type="button" id="permalink" data-url="/report?{{ query_string(ui, p) }}">Copy permalink</button>
+    {% if ui.view == 'table' %}<a href="/api/report?{{ query_string(ui, p) }}">JSON</a>{% endif %}
+  </div>
+</form>
+
+{% if data_range[0] is none %}
+<div class="empty">
+  <h2>No data yet</h2>
+  <p>Collect statistics with <code>python -m slowquerytop collect</code>, import a MySQL slow log with
+    <code>python -m slowquerytop import-slowlog</code>, or load sample data with <code>python -m slowquerytop demo</code>.</p>
+</div>
+{% elif ui.view == 'graph' %}
+<section class="panel">
+  <h2>{{ graph.metric_label }} <small>per {{ (graph.step // 60) ~ ' min' if graph.step < 3600 else ((graph.step // 3600) ~ ' h' if graph.step < 86400 else 'day') }}</small></h2>
+  <div class="chart-box tall"><canvas id="graph"></canvas></div>
+  <script type="application/json" id="graph-data">{{ graph|tojson }}</script>
+  {% if graph.series and p.group.startswith('checksum') and p.top > 0 %}
+  <table class="legend-table">
+    {% for s in graph.series %}
+    <tr><td><span class="swatch" data-i="{{ loop.index0 }}"></span></td>
+      <td><a href="/query/{{ s.key }}?{{ query_string(ui, p) }}">{{ s.key }}</a></td>
+      <td class="sql">{{ s.label[11:] }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</section>
+{% else %}
+<section class="panel">
+  <div class="summary">
+    <span><b>{{ totals.queries|fmt('int') }}</b> queries</span>
+    <span><b>{{ totals.exec_count|fmt('int') }}</b> executions</span>
+    <span><b>{{ totals.duration_sum|fmt('sec') }}</b> total time</span>
+    <span><b>{{ totals.cpu_time_sum|fmt('sec') }}</b> CPU</span>
+    <span><b>{{ totals.logical_reads_sum|fmt('int') }}</b> logical reads</span>
+    <span class="muted">showing {{ rows|length }}</span>
+  </div>
+  <div class="table-wrap">
+  <table class="report">
+    <thead><tr>
+      {% for col in group_cols if col not in p.fields %}<th>{{ FIELDS[col].label }}</th>{% endfor %}
+      {% for k in p.fields %}
+        {% set f = FIELDS[k] %}
+        {% if f.agg or k == 'checksum' %}
+          {% set nd = 'asc' if (p.order == k and p.direction == 'desc') else 'desc' %}
+          <th class="{{ f.fmt }}"><a href="/report?{{ query_string(ui, p, order=k, dir=nd) }}" title="{{ f.help }}">{{ f.label }}{% if p.order == k %} {{ '▼' if p.direction == 'desc' else '▲' }}{% endif %}</a></th>
+        {% else %}
+          <th class="{{ f.fmt }}">{{ f.label }}</th>
+        {% endif %}
+      {% endfor %}
+    </tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        {% for col in group_cols if col not in p.fields %}<td>{{ row[col] }}</td>{% endfor %}
+        {% for k in p.fields %}
+          {% set f = FIELDS[k] %}
+          {% if k == 'checksum' and 'checksum' in group_cols %}
+            <td class="mono"><a href="/query/{{ row.checksum }}?{{ query_string(ui, p) }}">{{ row.checksum }}</a></td>
+          {% elif k == 'snippet' %}
+            <td class="sql" title="{{ row.snippet }}">{% if row.snippet %}<a href="/query/{{ row.checksum }}?{{ query_string(ui, p) }}">{{ row.snippet|truncate(140, true, '…') }}</a>{% endif %}</td>
+          {% elif k == 'hostname' and 'hostname' in group_cols %}
+            <td>{{ row.hostname }}</td>
+          {% elif k == 'reviewed_on' %}
+            <td class="time">{% if row.reviewed_on %}<span class="badge ok">{{ row.reviewed_on|localtime }}</span>{% elif 'checksum' in group_cols %}<span class="badge">new</span>{% endif %}</td>
+          {% elif f.fmt == 'pct' %}
+            <td class="pct"><span class="bar" style="--p:{{ ((row[k] or 0) / 100)|round(4) }}"></span>{{ row[k]|fmt('pct') }}</td>
+          {% else %}
+            <td class="{{ f.fmt }}">{{ row[k]|fmt(f.fmt) }}</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+    {% else %}
+      <tr><td colspan="{{ p.fields|length + 3 }}" class="muted">No queries match these filters.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

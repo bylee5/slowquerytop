@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Query {{ review.checksum }} · slowquerytop{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ back }}">← back to report</a></p>
+
+<section class="panel">
+  <div class="head-row">
+    <h1 class="mono">{{ review.checksum }}</h1>
+    {% if review.reviewed_on %}<span class="badge ok">reviewed {{ review.reviewed_on|localtime }}{% if review.reviewed_by %} by {{ review.reviewed_by }}{% endif %}</span>
+    {% else %}<span class="badge">not reviewed</span>{% endif %}
+  </div>
+  <dl class="facts">
+    <div><dt>Source</dt><dd>{{ review.source_type }}</dd></div>
+    <div><dt>First seen</dt><dd>{{ review.first_seen|localtime }}</dd></div>
+    <div><dt>Last seen</dt><dd>{{ review.last_seen|localtime }}</dd></div>
+    <div><dt>Executions</dt><dd>{{ totals.exec_count|fmt('int') }}</dd></div>
+    <div><dt>Total time</dt><dd>{{ totals.duration_sum|fmt('sec') }}</dd></div>
+    <div><dt>Avg time</dt><dd>{{ ((totals.duration_sum / totals.exec_count) if totals.exec_count else none)|fmt('sec') }}</dd></div>
+    <div><dt>Avg reads</dt><dd>{{ ((totals.logical_reads_sum / totals.exec_count) if totals.exec_count else none)|fmt('num') }}</dd></div>
+  </dl>
+  <p class="muted small">Statistics for {{ ui.start_local|replace('T', ' ') }} – {{ ui.end_local|replace('T', ' ') }}
+    {% if p.hostnames %} · host {{ p.hostnames|join(', ') }}{% endif %}{% if p.dbs %} · db {{ p.dbs|join(', ') }}{% endif %}</p>
+</section>
+
+<section class="panel">
+  <h2>Fingerprint</h2>
+  <pre class="sql copyable">{{ review.fingerprint }}</pre>
+  <h2>Sample <button type="button" class="copy" data-target="sample">Copy</button></h2>
+  <pre class="sql" id="sample">{{ review.sample }}</pre>
+</section>
+
+<section class="panel">
+  <h2>History</h2>
+  <div class="chart-box"><canvas id="history"></canvas></div>
+  <script type="application/json" id="history-data">{{ history|tojson }}</script>
+</section>
+
+<section class="panel">
+  <h2>By host / database</h2>
+  <div class="table-wrap">
+  <table class="report">
+    <thead><tr><th>Host</th><th>DB</th><th class="int">Count</th><th class="sec">Time total</th><th class="pct">Time %</th>
+      <th class="sec">Time avg</th><th class="sec">Time max</th><th class="sec">CPU avg</th><th class="num">Reads avg</th>
+      <th class="num">Rows avg</th><th class="int">Plans</th><th class="time">Last seen</th></tr></thead>
+    <tbody>
+    {% for r in per_host %}
+      <tr><td>{{ r.hostname }}</td><td>{{ r.db }}</td><td class="int">{{ r.exec_count|fmt('int') }}</td>
+        <td class="sec">{{ r.duration_sum|fmt('sec') }}</td><td class="pct">{{ r.duration_pct|fmt('pct') }}</td>
+        <td class="sec">{{ r.duration_avg|fmt('sec') }}</td><td class="sec">{{ r.duration_max|fmt('sec') }}</td>
+        <td class="sec">{{ r.cpu_time_avg|fmt('sec') }}</td><td class="num">{{ r.logical_reads_avg|fmt('num') }}</td>
+        <td class="num">{{ r.rows_returned_avg|fmt('num') }}</td><td class="int">{{ r.plans }}</td>
+        <td class="time">{{ r.last_seen|localtime }}</td></tr>
+    {% else %}
+      <tr><td colspan="12" class="muted">No executions in this time range.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Execution plans</h2>
+  {% if plans or orphan_stats %}
+  <div class="table-wrap">
+  <table class="report">
+    <thead><tr><th>Plan hash</th><th>Host</th><th>DB</th><th class="int">Count</th><th class="sec">Time avg</th>
+      <th class="sec">CPU avg</th><th class="num">Reads avg</th><th class="time">First used</th><th class="time">Last used</th><th></th></tr></thead>
+    <tbody>
+    {% for pl in plans %}
+      <tr><td class="mono"><a href="/plan/{{ pl.id }}?ds={{ ui.ds }}">{{ pl.plan_hash }}</a></td><td>{{ pl.hostname }}</td><td>{{ pl.db }}</td>
+        {% if pl.stats %}
+        <td class="int">{{ pl.stats.exec_count|fmt('int') }}</td><td class="sec">{{ pl.stats.duration_avg|fmt('sec') }}</td>
+        <td class="sec">{{ pl.stats.cpu_time_avg|fmt('sec') }}</td><td class="num">{{ pl.stats.logical_reads_avg|fmt('num') }}</td>
+        <td class="time">{{ pl.stats.first_seen|localtime }}</td><td class="time">{{ pl.stats.last_seen|localtime }}</td>
+        {% else %}<td colspan="6" class="muted">not used in this time range</td>{% endif %}
+        <td><a href="/plan/{{ pl.id }}/download?ds={{ ui.ds }}">.sqlplan</a></td></tr>
+    {% endfor %}
+    {% for s in orphan_stats %}
+      <tr><td class="mono" title="plan XML not captured">{{ s.plan_hash or '—' }} <span class="muted small">(no XML)</span></td><td>{{ s.hostname }}</td><td>{{ s.db }}</td>
+        <td class="int">{{ s.exec_count|fmt('int') }}</td><td class="sec">{{ s.duration_avg|fmt('sec') }}</td>
+        <td class="sec">{{ s.cpu_time_avg|fmt('sec') }}</td><td class="num">{{ s.logical_reads_avg|fmt('num') }}</td>
+        <td class="time">{{ s.first_seen|localtime }}</td><td class="time">{{ s.last_seen|localtime }}</td><td></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No plans captured for this query.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Review</h2>
+  {% if saved %}<p class="notice">Review saved.</p>{% endif %}
+  <form method="post" action="/query/{{ review.checksum }}/review" class="review">
+    <input type="hidden" name="ds" value="{{ ui.ds }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <label>Reviewed by <input type="text" name="reviewed_by" maxlength="64" value="{{ review.reviewed_by or '' }}"></label>
+    <label class="check"><input type="checkbox" name="reviewed" value="1" {% if review.reviewed_on %}checked{% endif %}> Mark as reviewed</label>
+    <label class="wide">Comments <textarea name="comments" rows="4">{{ review.comments or '' }}</textarea></label>
+    <button type="submit" class="primary">Save review</button>
+  </form>
+</section>
+{% endblock %}

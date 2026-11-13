@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Plan {{ plan.plan_hash }} · slowquerytop{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/query/{{ plan.checksum }}?ds={{ ui.ds }}">← query {{ plan.checksum }}</a></p>
+
+<section class="panel">
+  <div class="head-row">
+    <h1>Plan <span class="mono">{{ plan.plan_hash }}</span></h1>
+    <a class="button" href="/plan/{{ plan.id }}/download?ds={{ ui.ds }}">Download .sqlplan</a>
+  </div>
+  {% if summary.error %}<p class="notice warn">{{ summary.error }}</p>{% endif %}
+  <dl class="facts">
+    <div><dt>Host / DB</dt><dd>{{ plan.hostname }} / {{ plan.db }}</dd></div>
+    <div><dt>Captured</dt><dd>{{ plan.captured_at|localtime }}</dd></div>
+    <div><dt>Estimated cost</dt><dd>{{ summary.statement_cost|fmt('num') }}</dd></div>
+    <div><dt>Optimization</dt><dd>{{ summary.optimization_level }}{% if summary.early_abort %} ({{ summary.early_abort }}){% endif %}</dd></div>
+    <div><dt>DOP</dt><dd>{{ summary.dop or '—' }}</dd></div>
+    <div><dt>Memory grant KB</dt><dd>{{ summary.memory_grant_kb or '—' }}</dd></div>
+    <div><dt>CE model</dt><dd>{{ summary.cardinality_model or '—' }}</dd></div>
+  </dl>
+  {% if summary.warnings %}<p class="notice warn">Plan warnings: {{ summary.warnings|join(', ') }}</p>{% endif %}
+</section>
+
+{% if summary.missing_indexes %}
+<section class="panel">
+  <h2>Missing index suggestions</h2>
+  <table class="report">
+    <thead><tr><th class="num">Impact</th><th>Table</th><th>Suggested DDL</th></tr></thead>
+    <tbody>
+    {% for mi in summary.missing_indexes %}
+      <tr><td class="num">{{ mi.impact|fmt('num') }}%</td><td>{{ mi.table }}</td><td><pre class="sql inline">{{ mi.ddl }}</pre></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Optimizer suggestions only — review against existing indexes before creating.</p>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Operators</h2>
+  <div class="table-wrap">
+  <table class="report plan-tree">
+    <thead><tr><th>Operator</th><th>Object</th><th class="num">Est. rows</th><th class="num">Subtree cost</th><th class="pct">Own cost %</th><th>Predicate / warnings</th></tr></thead>
+    <tbody>
+    {% for n in summary.nodes %}
+      <tr class="{{ 'hot' if (n.cost_pct or 0) >= 25 }}">
+        <td style="padding-left: {{ 0.6 + n.depth * 1.2 }}em">{{ n.physical_op }}{% if n.logical_op and n.logical_op != n.physical_op %} <span class="muted">({{ n.logical_op }})</span>{% endif %}</td>
+        <td class="mono small">{{ n.obj }}</td>
+        <td class="num">{{ n.est_rows|fmt('num') }}</td>
+        <td class="num">{{ n.est_cost|fmt('num') }}</td>
+        <td class="pct"><span class="bar" style="--p:{{ ((n.cost_pct or 0) / 100)|round(4) }}"></span>{{ n.cost_pct|fmt('pct') }}</td>
+        <td class="small">{{ n.extra }}{% if n.warnings %} <span class="badge warn">{{ n.warnings|join(', ') }}</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">No operators found in the plan XML.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+{% if summary.parameters %}
+<section class="panel">
+  <h2>Parameters</h2>
+  <table class="report">
+    <thead><tr><th>Name</th><th>Compiled value</th><th>Runtime value</th></tr></thead>
+    <tbody>{% for prm in summary.parameters %}<tr><td class="mono">{{ prm.name }}</td><td class="mono">{{ prm.compiled }}</td><td class="mono">{{ prm.runtime }}</td></tr>{% endfor %}</tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="panel">
+  <details>
+    <summary>Statement</summary>
+    <pre class="sql">{{ summary.statement }}</pre>
+  </details>
+  <details>
+    <summary>Raw plan XML</summary>
+    <pre class="xml">{{ plan.plan_xml }}</pre>
+  </details>
+</section>
+{% endblock %}
